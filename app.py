@@ -25,12 +25,21 @@ if 'playoff_asking_penalties' not in st.session_state:
 # --- FUNÇÕES AUXILIARES ---
 
 def get_sorted_rankings(teams, for_pairing=False):
-    # REGRA: Vitórias > Bye (False > True) > Saldo > Gols Pró
+    """
+    Retorna a lista de times ordenada por mérito.
+    CRITÉRIOS CORRIGIDOS:
+    1. Mais Vitórias
+    2. Menos Derrotas (CRUCIAL: 3-0 ganha de 3-1)
+    3. Não ter recebido Bye (Quem jogou tudo tem prioridade)
+    4. Saldo de Gols
+    5. Gols Pró
+    """
     if for_pairing:
         random.shuffle(teams)
     
     return sorted(teams, key=lambda x: (
         x['wins'], 
+        -x['losses'], # Negativo porque o sort é reverso (0 > -1). Menos derrotas sobe.
         not x['received_bye'], 
         x['goal_diff'], 
         x['goals_for']
@@ -85,7 +94,7 @@ def render_sidebar_stats():
                     'St': status_icon,
                     'Time': t['name'],
                     'V-D': f"{t['wins']}-{t['losses']}",
-                    'Bye': 'Sim' if t['received_bye'] else '-', # Coluna Bye restaurada
+                    'Bye': 'Sim' if t['received_bye'] else '-', 
                     'GP': t['goals_for'],
                     'GC': goals_against,
                     'SG': t['goal_diff']
@@ -98,7 +107,7 @@ def render_sidebar_stats():
                 use_container_width=True, 
                 hide_index=True,
                 column_config={
-                    "St": st.column_config.TextColumn("St", width="min"), # Largura mínima para o ícone
+                    "St": st.column_config.TextColumn("St", width="min"), 
                     "Time": st.column_config.TextColumn("Time", width="small"),
                     "V-D": st.column_config.TextColumn("V-D", width="min"),
                     "Bye": st.column_config.TextColumn("Bye", width="min"),
@@ -108,7 +117,7 @@ def render_sidebar_stats():
                 }
             )
             
-            st.caption("St: Status | Bye: Já folgou? | GP: Pró | GC: Contra | SG: Saldo")
+            st.caption("GP: Gols Pró | GC: Gols Contra | SG: Saldo")
             st.markdown("---")
             st.markdown("**Legenda:**")
             st.markdown("🟢 Classificado | 🔴 Eliminado | ⚪ Ativo")
@@ -178,7 +187,7 @@ def init_playoffs():
 
     if num_q == 3:
         round_name = "Semifinal Única"
-        waiting_teams = [seeds[0]] 
+        waiting_teams = [seeds[0]] # Seeds[0] agora é GARANTIDAMENTE o 3-0 (se houver)
         current_matches = [{'id': 'S1', 'home': seeds[1], 'away': seeds[2], 'label': 'Semifinal'}]
     elif num_q == 4:
         round_name = "Semifinais"
@@ -247,11 +256,12 @@ def advance_playoff_round(results, waiting_teams):
     
     if count == 2:
         next_round_name = "Grande Final"
-        pool = get_sorted_rankings(pool, for_pairing=False)
+        # Sem reordenar para manter o chaveamento, exceto se quiser estético
         next_matches = [{'id': 'F', 'home': pool[0], 'away': pool[1], 'label': 'Final'}]
         
     elif count == 4:
         next_round_name = "Semifinais"
+        # Reordenamos por mérito para garantir cruzamento olímpico correto
         pool = get_sorted_rankings(pool, for_pairing=False)
         next_matches = [
             {'id': 'S1', 'home': pool[0], 'away': pool[3], 'label': 'Semi 1'},
@@ -352,7 +362,6 @@ elif st.session_state.phase == 'swiss':
             
             with c1: st.markdown(f"<h3 style='text-align: right'>{home_name}</h3>", unsafe_allow_html=True)
             
-            # INPUTS NULOS (Vazios)
             with c2: 
                 s1 = st.number_input("Gols", min_value=0, value=None, key=f"h_{round_idx}_{i}", disabled=disabled_score)
             with c3: 
@@ -542,12 +551,10 @@ elif st.session_state.phase == 'playoff_gameplay':
                             m['h_pen'] = 0
                             m['a_pen'] = 0
                             
-                            # Define vencedor
                             w = m['home'] if item['h_g'] > item['a_g'] else m['away']
                             m['winner_id'] = w['id']
                             winners.append(w)
                             
-                            # ATUALIZA ESTATÍSTICAS (Soma ao total do time)
                             update_team_stats(m['home']['id'], item['h_g'], item['a_g'], is_winner=(w['id'] == m['home']['id']))
                             update_team_stats(m['away']['id'], item['a_g'], item['h_g'], is_winner=(w['id'] == m['away']['id']))
                         
@@ -586,7 +593,6 @@ elif st.session_state.phase == 'playoff_gameplay':
                             m['winner_id'] = w['id']
                             winners.append(w)
                             
-                            # ATUALIZA ESTATÍSTICAS (Mesmo com penaltis, soma gols do tempo normal)
                             update_team_stats(m['home']['id'], item['h_g'], item['a_g'], is_winner=(w['id'] == m['home']['id']))
                             update_team_stats(m['away']['id'], item['a_g'], item['h_g'], is_winner=(w['id'] == m['away']['id']))
                         
