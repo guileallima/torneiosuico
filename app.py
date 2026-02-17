@@ -37,12 +37,6 @@ def get_sorted_rankings(teams, for_pairing=False):
     ), reverse=True)
 
 def update_team_stats(team_id, goals_scored, goals_conceded, is_winner, is_bye=False):
-    """
-    Atualiza as estatísticas. 
-    Importante: 'is_winner' define quem ganha o ponto na tabela (Wins += 1).
-    Mesmo que o jogo tenha sido empate no tempo normal (goals_scored == goals_conceded),
-    quem ganhou nos pênaltis deve vir com is_winner=True.
-    """
     for team in st.session_state.teams:
         if team['id'] == team_id:
             team['goals_for'] += goals_scored
@@ -64,7 +58,7 @@ def update_team_stats(team_id, goals_scored, goals_conceded, is_winner, is_bye=F
             break
 
 def render_sidebar_stats():
-    """Função para mostrar o histórico na barra lateral"""
+    """Função para mostrar o histórico detalhado na barra lateral"""
     with st.sidebar:
         st.header("📊 Classificação")
         if st.session_state.teams:
@@ -72,26 +66,49 @@ def render_sidebar_stats():
             
             display_data = []
             for t in sorted_teams:
-                record = f"{t['wins']}-{t['losses']}"
+                # Calcula gols contra na hora (GP - Saldo)
+                goals_against = t['goals_for'] - t['goal_diff']
+                
                 display_data.append({
                     'Time': t['name'],
-                    'Rec': record,
-                    'Status': t['status'],
-                    'Bye': 'Sim' if t['received_bye'] else '-'
+                    'V-D': f"{t['wins']}-{t['losses']}",
+                    'GP': t['goals_for'],
+                    'GC': goals_against,
+                    'SG': t['goal_diff']
                 })
             
             df = pd.DataFrame(display_data)
-            st.dataframe(df, use_container_width=True, hide_index=True)
             
-            st.info("Critérios: Vitórias > Sem Bye > Saldo > Gols Pró")
+            # Configuração visual da tabela para ficar compacta
+            st.dataframe(
+                df, 
+                use_container_width=True, 
+                hide_index=True,
+                column_config={
+                    "Time": st.column_config.TextColumn("Time", width="medium"),
+                    "V-D": st.column_config.TextColumn("V-D", width="small"),
+                    "GP": st.column_config.NumberColumn("GP", format="%d"),
+                    "GC": st.column_config.NumberColumn("GC", format="%d"),
+                    "SG": st.column_config.NumberColumn("SG", format="%d"),
+                }
+            )
+            
+            st.caption("GP: Gols Pró | GC: Gols Contra | SG: Saldo")
+            
+            # Legenda de Status
+            st.markdown("---")
+            st.markdown("**Legenda de Status:**")
+            st.markdown("🟢 Classificado (3 Vitórias)")
+            st.markdown("🔴 Eliminado (3 Derrotas)")
+            st.markdown("⚪ Em Jogo")
 
 # --- LÓGICA DO SUIÇO ---
 
 def generate_swiss_round():
-    st.session_state.swiss_asking_penalties = False # Reseta estado de penaltis ao gerar nova rodada
+    st.session_state.swiss_asking_penalties = False 
     
     active_teams = [t for t in st.session_state.teams if t['status'] == 'Ativo']
-    random.shuffle(active_teams) # Garante aleatoriedade inicial
+    random.shuffle(active_teams) 
     
     # BYE
     bye_team = None
@@ -316,7 +333,6 @@ elif st.session_state.phase == 'swiss':
         matches_data_input = []
         any_draw = False
         
-        # Desabilita inputs de gols se estivermos pedindo pênaltis
         disabled_score = st.session_state.swiss_asking_penalties
 
         for i, match in enumerate(matches):
@@ -326,7 +342,7 @@ elif st.session_state.phase == 'swiss':
             
             with c1: st.markdown(f"<h3 style='text-align: right'>{home_name}</h3>", unsafe_allow_html=True)
             
-            # --- CAIXAS NULAS (value=None) ---
+            # INPUTS NULOS (Vazios)
             with c2: 
                 s1 = st.number_input("Gols", min_value=0, value=None, key=f"h_{round_idx}_{i}", disabled=disabled_score)
             with c3: 
@@ -337,8 +353,6 @@ elif st.session_state.phase == 'swiss':
             pen_h = 0
             pen_a = 0
             
-            # Lógica de Pênalti na Fase Suíça
-            # Só mostra se s1 e s2 não forem None (já digitados) e forem iguais
             if st.session_state.swiss_asking_penalties and s1 is not None and s2 is not None and s1 == s2:
                 st.warning("⚠️ Empate! Decisão por pênaltis:")
                 cp1, cp2 = st.columns(2)
@@ -357,7 +371,6 @@ elif st.session_state.phase == 'swiss':
         submitted = st.form_submit_button(btn_label)
         
         if submitted:
-            # 1. Validação de Campos Vazios
             missing_input = False
             for m in matches_data_input:
                 if m['h_g'] is None or m['a_g'] is None:
@@ -366,10 +379,8 @@ elif st.session_state.phase == 'swiss':
             if missing_input:
                 st.error("Por favor, preencha todos os placares do tempo normal.")
             else:
-                # 2. Lógica de Processamento
                 has_new_draw = False
                 
-                # Se NÃO estávamos pedindo pênaltis, checamos se precisa pedir
                 if not st.session_state.swiss_asking_penalties:
                     for item in matches_data_input:
                         if item['h_g'] == item['a_g']:
@@ -379,17 +390,14 @@ elif st.session_state.phase == 'swiss':
                         st.session_state.swiss_asking_penalties = True
                         st.rerun()
                     else:
-                        # Processar Vitórias Normais
                         if bye_team:
                             update_team_stats(bye_team['id'], 1, 0, is_winner=True, is_bye=True)
                         
                         for item in matches_data_input:
-                            # Quem fez mais gols ganha
                             winner_is_home = item['h_g'] > item['a_g']
                             update_team_stats(item['home_id'], item['h_g'], item['a_g'], is_winner=winner_is_home)
                             update_team_stats(item['away_id'], item['a_g'], item['h_g'], is_winner=not winner_is_home)
                         
-                        # Verifica fim da fase
                         active_count = len([t for t in st.session_state.teams if t['status'] == 'Ativo'])
                         if active_count <= 1:
                             init_playoffs()
@@ -398,16 +406,13 @@ elif st.session_state.phase == 'swiss':
                         st.rerun()
                 
                 else:
-                    # Estamos validando os Pênaltis
                     valid_penalties = True
                     for item in matches_data_input:
                         if item['h_g'] == item['a_g']:
-                            # Valida se pênaltis foram preenchidos
                             if item['h_p'] is None or item['a_p'] is None:
                                 st.error("Preencha os placares dos pênaltis nos jogos empatados.")
                                 valid_penalties = False
                                 break
-                            # Valida empate nos pênaltis
                             if item['h_p'] == item['a_p']:
                                 st.error("Pênaltis não podem terminar empatados!")
                                 valid_penalties = False
@@ -421,13 +426,11 @@ elif st.session_state.phase == 'swiss':
                             hg, ag = item['h_g'], item['a_g']
                             hp, ap = item['h_p'], item['a_p']
                             
-                            # Define vencedor
                             if hg != ag:
                                 winner_is_home = hg > ag
                             else:
-                                winner_is_home = hp > ap # Decisão por penaltis
+                                winner_is_home = hp > ap
                             
-                            # Atualiza tabela (Saldo conta apenas tempo normal)
                             update_team_stats(item['home_id'], hg, ag, is_winner=winner_is_home)
                             update_team_stats(item['away_id'], ag, hg, is_winner=not winner_is_home)
 
@@ -472,7 +475,6 @@ elif st.session_state.phase == 'playoff_gameplay':
             
             with col1: st.markdown(f"<h3 style='text-align: right'>{home['name']}</h3>", unsafe_allow_html=True)
             
-            # --- CAIXAS NULAS (value=None) ---
             with col2: 
                 val_h = st.number_input("Gols", min_value=0, value=None, key=f"pg_h_{i}", disabled=disabled_score)
             with col3: st.markdown("<h3 style='text-align: center'>X</h3>", unsafe_allow_html=True)
@@ -500,7 +502,6 @@ elif st.session_state.phase == 'playoff_gameplay':
         submitted = st.form_submit_button(btn_label)
         
         if submitted:
-            # 1. Validação de Campos Vazios
             missing_input = False
             for m in matches_data_input:
                 if m['h_g'] is None or m['a_g'] is None:
