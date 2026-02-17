@@ -70,12 +70,22 @@ def render_sidebar_stats():
             
             display_data = []
             for t in sorted_teams:
+                # Define o ícone com base no status
+                if t['status'] == 'Classificado':
+                    status_icon = "🟢"
+                elif t['status'] == 'Eliminado':
+                    status_icon = "🔴"
+                else:
+                    status_icon = "⚪"
+
                 # Calcula gols contra na hora (GP - Saldo)
                 goals_against = t['goals_for'] - t['goal_diff']
                 
                 display_data.append({
+                    'St': status_icon,
                     'Time': t['name'],
                     'V-D': f"{t['wins']}-{t['losses']}",
+                    'Bye': 'Sim' if t['received_bye'] else '-', # Coluna Bye restaurada
                     'GP': t['goals_for'],
                     'GC': goals_against,
                     'SG': t['goal_diff']
@@ -88,15 +98,17 @@ def render_sidebar_stats():
                 use_container_width=True, 
                 hide_index=True,
                 column_config={
-                    "Time": st.column_config.TextColumn("Time", width="medium"),
-                    "V-D": st.column_config.TextColumn("V-D", width="small"),
-                    "GP": st.column_config.NumberColumn("GP", format="%d"),
-                    "GC": st.column_config.NumberColumn("GC", format="%d"),
-                    "SG": st.column_config.NumberColumn("SG", format="%d"),
+                    "St": st.column_config.TextColumn("St", width="min"), # Largura mínima para o ícone
+                    "Time": st.column_config.TextColumn("Time", width="small"),
+                    "V-D": st.column_config.TextColumn("V-D", width="min"),
+                    "Bye": st.column_config.TextColumn("Bye", width="min"),
+                    "GP": st.column_config.NumberColumn("GP", format="%d", width="min"),
+                    "GC": st.column_config.NumberColumn("GC", format="%d", width="min"),
+                    "SG": st.column_config.NumberColumn("SG", format="%d", width="min"),
                 }
             )
             
-            st.caption("GP: Gols Pró | GC: Gols Contra | SG: Saldo")
+            st.caption("St: Status | Bye: Já folgou? | GP: Pró | GC: Contra | SG: Saldo")
             st.markdown("---")
             st.markdown("**Legenda:**")
             st.markdown("🟢 Classificado | 🔴 Eliminado | ⚪ Ativo")
@@ -235,13 +247,11 @@ def advance_playoff_round(results, waiting_teams):
     
     if count == 2:
         next_round_name = "Grande Final"
-        # Na final, não reordenamos por seed para manter a lógica de chaveamento, 
-        # mas se quiser purismo: pool = get_sorted_rankings(pool, for_pairing=False)
+        pool = get_sorted_rankings(pool, for_pairing=False)
         next_matches = [{'id': 'F', 'home': pool[0], 'away': pool[1], 'label': 'Final'}]
         
     elif count == 4:
         next_round_name = "Semifinais"
-        # Reordenamos por seed para garantir cruzamento olímpico (1vs4, 2vs3)
         pool = get_sorted_rankings(pool, for_pairing=False)
         next_matches = [
             {'id': 'S1', 'home': pool[0], 'away': pool[3], 'label': 'Semi 1'},
@@ -341,8 +351,13 @@ elif st.session_state.phase == 'swiss':
             away_name = next(t['name'] for t in st.session_state.teams if t['id'] == match['away'])
             
             with c1: st.markdown(f"<h3 style='text-align: right'>{home_name}</h3>", unsafe_allow_html=True)
-            with c2: s1 = st.number_input("Gols", min_value=0, value=None, key=f"h_{round_idx}_{i}", disabled=disabled_score)
-            with c3: s2 = st.number_input("Gols", min_value=0, value=None, key=f"a_{round_idx}_{i}", disabled=disabled_score)
+            
+            # INPUTS NULOS (Vazios)
+            with c2: 
+                s1 = st.number_input("Gols", min_value=0, value=None, key=f"h_{round_idx}_{i}", disabled=disabled_score)
+            with c3: 
+                s2 = st.number_input("Gols", min_value=0, value=None, key=f"a_{round_idx}_{i}", disabled=disabled_score)
+            
             with c4: st.markdown(f"<h3>{away_name}</h3>", unsafe_allow_html=True)
             
             pen_h = 0
