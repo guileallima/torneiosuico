@@ -244,13 +244,14 @@ def advance_playoff_round(results, waiting_teams):
 
 # --- APP PRINCIPAL ---
 
-render_sidebar_stats() # Renderiza a sidebar em todas as telas
+# ⚠️ MUDANÇA: Removemos a chamada render_sidebar_stats() daqui para colocar no final.
 
 if st.session_state.phase == 'registration':
     st.title("🏆 Inscrição de Times")
     
     col1, col2 = st.columns([3, 1])
     with col1:
+        # Usamos session_state para limpar o input se quisermos, mas o simples funciona
         new_team = st.text_input("Nome do Time")
     with col2:
         if st.button("Adicionar"):
@@ -266,6 +267,7 @@ if st.session_state.phase == 'registration':
                 }
                 st.session_state.teams.append(t_obj)
                 st.success(f"{new_team} adicionado!")
+                # st.rerun() # Opcional: força limpar o campo, mas o render no final já atualiza a tabela
             elif not new_team:
                 st.warning("Digite um nome.")
             else:
@@ -350,12 +352,7 @@ elif st.session_state.phase == 'playoff_gameplay':
         names_waiting = ", ".join([t['name'] for t in current_round['waiting']])
         st.info(f"🛑 Times aguardando na próxima fase (Byes): **{names_waiting}**")
     
-    # -- FORMULÁRIO INTERATIVO DO MATA-MATA --
-    # O Streamlit não permite inputs condicionais DENTRO de um form facilmente.
-    # Usaremos st.form apenas para o botão de submissão, mas gerenciaremos o estado.
-    
     with st.form(key=f"playoff_act_{len(st.session_state.playoff_schedule)}"):
-        
         matches_data_input = []
         any_draw = False
 
@@ -365,10 +362,8 @@ elif st.session_state.phase == 'playoff_gameplay':
             
             st.markdown(f"**{match['label']}**")
             
-            # Layout de Placar
             col1, col2, col3, col4, col5 = st.columns([3, 1, 0.5, 1, 3])
             
-            # Se já estamos pedindo pênaltis, travamos o input de gols para não confundir
             disabled_score = st.session_state.asking_penalties
             
             with col1: st.markdown(f"<h3 style='text-align: right'>{home['name']}</h3>", unsafe_allow_html=True)
@@ -379,7 +374,6 @@ elif st.session_state.phase == 'playoff_gameplay':
                 val_a = st.number_input("Gols", min_value=0, key=f"pg_a_{i}", disabled=disabled_score)
             with col5: st.markdown(f"<h3>{away['name']}</h3>", unsafe_allow_html=True)
             
-            # Verifica empate para abrir caixa de pênalti
             pen_h = 0
             pen_a = 0
             
@@ -396,16 +390,14 @@ elif st.session_state.phase == 'playoff_gameplay':
                 'h_p': pen_h, 'a_p': pen_a
             })
 
-        # Botão muda de texto dependendo do estado
         btn_label = "Confirmar Classificação" if st.session_state.asking_penalties else "Conferir Resultados"
         submitted = st.form_submit_button(btn_label)
         
         if submitted:
-            # 1. Verificar se há empates no Tempo Normal
+            # LÓGICA DE SUBMISSÃO
             has_new_draw = False
             winners = []
             
-            # Primeiro loop para ver se precisa ativar modo pênalti
             if not st.session_state.asking_penalties:
                 for item in matches_data_input:
                     if item['h_g'] == item['a_g']:
@@ -415,33 +407,25 @@ elif st.session_state.phase == 'playoff_gameplay':
                     st.session_state.asking_penalties = True
                     st.rerun()
                 else:
-                    # Sem empates, processar vencedores
                     for item in matches_data_input:
                         m = item['match']
-                        # Salvar dados no histórico
                         m['h_goals'] = item['h_g']
                         m['a_goals'] = item['a_g']
                         m['is_penalties'] = False
                         m['h_pen'] = 0
                         m['a_pen'] = 0
-                        
                         w = m['home'] if item['h_g'] > item['a_g'] else m['away']
                         m['winner_id'] = w['id']
                         winners.append(w)
                     
-                    # Avançar
                     current_round['completed'] = True
                     advance_playoff_round(winners, current_round['waiting'])
                     st.rerun()
-            
             else:
-                # Estamos no modo pênaltis
                 valid_penalties = True
                 winners = []
-                
                 for item in matches_data_input:
                     if item['h_g'] == item['a_g']:
-                        # Validar se pênaltis não empataram
                         if item['h_p'] == item['a_p']:
                             st.error("Pênaltis não podem terminar empatados!")
                             valid_penalties = False
@@ -456,18 +440,15 @@ elif st.session_state.phase == 'playoff_gameplay':
                         m['a_pen'] = item['a_p']
                         
                         if item['h_g'] != item['a_g']:
-                            # Decidido no tempo normal (caso misto)
                             m['is_penalties'] = False
                             w = m['home'] if item['h_g'] > item['a_g'] else m['away']
                         else:
-                            # Decidido nos pênaltis
                             m['is_penalties'] = True
                             w = m['home'] if item['h_p'] > item['a_p'] else m['away']
                         
                         m['winner_id'] = w['id']
                         winners.append(w)
                     
-                    # Avançar
                     current_round['completed'] = True
                     advance_playoff_round(winners, current_round['waiting'])
                     st.rerun()
@@ -490,3 +471,8 @@ elif st.session_state.phase == 'champion':
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         st.rerun()
+
+# --- ATUALIZAÇÃO DA SIDEBAR NO FINAL ---
+# Esta chamada foi movida para o FINAL do script.
+# Assim, ela pega o estado já atualizado por qualquer ação feita acima.
+render_sidebar_stats()
