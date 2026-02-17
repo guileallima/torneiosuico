@@ -17,12 +17,13 @@ if 'playoff_schedule' not in st.session_state:
 if 'champion' not in st.session_state:
     st.session_state.champion = None
 if 'asking_penalties' not in st.session_state:
-    st.session_state.asking_penalties = False # Controle para exibir pênaltis
+    st.session_state.asking_penalties = False 
 
 # --- FUNÇÕES AUXILIARES ---
 
 def get_sorted_rankings(teams, for_pairing=False):
     # REGRA: Vitórias > Bye (False > True) > Saldo > Gols Pró
+    # Se for para pareamento, embaralhamos antes para que empates não sigam ordem alfabética/cadastro
     if for_pairing:
         random.shuffle(teams)
     
@@ -58,12 +59,11 @@ def render_sidebar_stats():
     with st.sidebar:
         st.header("📊 Classificação / Histórico")
         if st.session_state.teams:
-            sorted_teams = get_sorted_rankings(st.session_state.teams)
+            # Mostra ranking oficial (sem aleatoriedade, apenas mérito)
+            sorted_teams = get_sorted_rankings(st.session_state.teams, for_pairing=False)
             
-            # Criar visualização limpa
             display_data = []
             for t in sorted_teams:
-                # Formata o recorde ex: "3-1"
                 record = f"{t['wins']}-{t['losses']}"
                 display_data.append({
                     'Time': t['name'],
@@ -82,9 +82,16 @@ def render_sidebar_stats():
 def generate_swiss_round():
     active_teams = [t for t in st.session_state.teams if t['status'] == 'Ativo']
     
+    # --- CORREÇÃO DO SORTEIO ---
+    # Embaralhamos a lista de ativos ANTES de qualquer lógica.
+    # Isso garante que na Rodada 1 (onde todos são iguais), o Bye e os pares sejam aleatórios.
+    random.shuffle(active_teams)
+    
     # REGRA: BYE (NÚMERO ÍMPAR)
     bye_team = None
     if len(active_teams) % 2 != 0:
+        # Ordena do pior para o melhor para achar o candidato ao bye
+        # Como já demos shuffle antes, se houver empate de stats, a ordem é aleatória
         worst_sorted = sorted(active_teams, key=lambda x: (
             x['wins'], 
             not x['received_bye'], 
@@ -102,6 +109,7 @@ def generate_swiss_round():
         active_teams.remove(bye_team)
 
     # PAREAMENTO
+    # Usamos for_pairing=True para garantir aleatoriedade nos empates de pareamento também
     ranked_pool = get_sorted_rankings(active_teams, for_pairing=True)
     matches = []
     
@@ -130,7 +138,7 @@ def generate_swiss_round():
 
 def init_playoffs():
     qualified = [t for t in st.session_state.teams if t['status'] == 'Classificado']
-    seeds = get_sorted_rankings(qualified) 
+    seeds = get_sorted_rankings(qualified, for_pairing=False) 
     
     num_q = len(seeds)
     current_matches = []
@@ -174,7 +182,6 @@ def init_playoffs():
             {'id': 'Q4', 'home': seeds[3], 'away': seeds[4], 'label': 'Quartas 4'}
         ]
 
-    # Estrutura da rodada: scores temporários iniciam zerados
     for m in current_matches:
         m['h_goals'] = 0
         m['a_goals'] = 0
@@ -193,7 +200,7 @@ def init_playoffs():
     st.session_state.asking_penalties = False
 
 def advance_playoff_round(results, waiting_teams):
-    st.session_state.asking_penalties = False # Reseta estado de penaltis
+    st.session_state.asking_penalties = False 
     
     pool = waiting_teams + results
     count = len(pool)
@@ -207,16 +214,14 @@ def advance_playoff_round(results, waiting_teams):
         
     elif count == 4:
         next_round_name = "Semifinais"
-        # Reordena por seed original para cruzamento olímpico
-        pool = get_sorted_rankings(pool)
+        pool = get_sorted_rankings(pool, for_pairing=False)
         next_matches = [
             {'id': 'S1', 'home': pool[0], 'away': pool[3], 'label': 'Semi 1'},
             {'id': 'S2', 'home': pool[1], 'away': pool[2], 'label': 'Semi 2'}
         ]
     else:
-        # Fallback genérico
         next_round_name = "Rodada Eliminatória"
-        pool = get_sorted_rankings(pool)
+        pool = get_sorted_rankings(pool, for_pairing=False)
         while len(pool) >= 2:
             home = pool.pop(0)
             away = pool.pop(-1)
@@ -227,7 +232,6 @@ def advance_playoff_round(results, waiting_teams):
         st.session_state.phase = 'champion'
         return
 
-    # Inicializa scores zerados
     for m in next_matches:
         m['h_goals'] = 0
         m['a_goals'] = 0
@@ -244,34 +248,39 @@ def advance_playoff_round(results, waiting_teams):
 
 # --- APP PRINCIPAL ---
 
-# ⚠️ MUDANÇA: Removemos a chamada render_sidebar_stats() daqui para colocar no final.
+# 1. Callback para limpar o input de texto
+def add_team_callback():
+    # Pega o valor digitado na chave 'team_input'
+    new_team = st.session_state.team_input
+    
+    if new_team and new_team not in [t['name'] for t in st.session_state.teams]:
+        t_obj = {
+            'id': len(st.session_state.teams) + 1,
+            'name': new_team,
+            'wins': 0, 'losses': 0,
+            'goals_for': 0, 'goal_diff': 0,
+            'received_bye': False,
+            'history': [],
+            'status': 'Ativo'
+        }
+        st.session_state.teams.append(t_obj)
+        # LIMPA A CAIXA DE TEXTO
+        st.session_state.team_input = "" 
+    elif not new_team:
+        st.warning("Digite um nome.")
+    else:
+        st.error("Time já existe.")
 
 if st.session_state.phase == 'registration':
     st.title("🏆 Inscrição de Times")
     
     col1, col2 = st.columns([3, 1])
     with col1:
-        # Usamos session_state para limpar o input se quisermos, mas o simples funciona
-        new_team = st.text_input("Nome do Time")
+        # CORREÇÃO DA LIMPEZA: Usamos key="team_input"
+        st.text_input("Nome do Time", key="team_input")
     with col2:
-        if st.button("Adicionar"):
-            if new_team and new_team not in [t['name'] for t in st.session_state.teams]:
-                t_obj = {
-                    'id': len(st.session_state.teams) + 1,
-                    'name': new_team,
-                    'wins': 0, 'losses': 0,
-                    'goals_for': 0, 'goal_diff': 0,
-                    'received_bye': False,
-                    'history': [],
-                    'status': 'Ativo'
-                }
-                st.session_state.teams.append(t_obj)
-                st.success(f"{new_team} adicionado!")
-                # st.rerun() # Opcional: força limpar o campo, mas o render no final já atualiza a tabela
-            elif not new_team:
-                st.warning("Digite um nome.")
-            else:
-                st.error("Time já existe.")
+        # O botão chama a função add_team_callback antes de recarregar
+        st.button("Adicionar", on_click=add_team_callback)
 
     if st.session_state.teams:
         st.markdown(f"**Total de Inscritos: {len(st.session_state.teams)}**")
@@ -335,7 +344,6 @@ elif st.session_state.phase == 'swiss':
 elif st.session_state.phase == 'playoff_gameplay':
     st.title("🔥 Fase Final (Mata-Mata)")
 
-    # Exibe histórico de rodadas completas
     for idx, r_data in enumerate(st.session_state.playoff_schedule):
         if r_data['completed']:
             with st.expander(f"✅ {r_data['name']} (Concluído)", expanded=False):
@@ -344,7 +352,6 @@ elif st.session_state.phase == 'playoff_gameplay':
                     penalties_txt = f" (Pên: {m['h_pen']} x {m['a_pen']})" if m['is_penalties'] else ""
                     st.write(f"{m['label']}: {m['home']['name']} {m['h_goals']} x {m['a_goals']} {m['away']['name']}{penalties_txt} -> Vencedor: {winner_name}")
 
-    # Exibe rodada atual
     current_round = st.session_state.playoff_schedule[-1]
     st.markdown(f"### ⚡ Em andamento: {current_round['name']}")
     
@@ -394,7 +401,6 @@ elif st.session_state.phase == 'playoff_gameplay':
         submitted = st.form_submit_button(btn_label)
         
         if submitted:
-            # LÓGICA DE SUBMISSÃO
             has_new_draw = False
             winners = []
             
@@ -472,7 +478,5 @@ elif st.session_state.phase == 'champion':
             del st.session_state[key]
         st.rerun()
 
-# --- ATUALIZAÇÃO DA SIDEBAR NO FINAL ---
-# Esta chamada foi movida para o FINAL do script.
-# Assim, ela pega o estado já atualizado por qualquer ação feita acima.
+# RENDERIZA A SIDEBAR NO FINAL PARA GARANTIR ATUALIZAÇÃO
 render_sidebar_stats()
