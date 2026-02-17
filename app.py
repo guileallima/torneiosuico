@@ -37,6 +37,9 @@ def get_sorted_rankings(teams, for_pairing=False):
     ), reverse=True)
 
 def update_team_stats(team_id, goals_scored, goals_conceded, is_winner, is_bye=False):
+    """
+    Atualiza as estatísticas globais do time (Swiss + Mata-Mata).
+    """
     for team in st.session_state.teams:
         if team['id'] == team_id:
             team['goals_for'] += goals_scored
@@ -50,17 +53,18 @@ def update_team_stats(team_id, goals_scored, goals_conceded, is_winner, is_bye=F
             if is_bye:
                 team['received_bye'] = True
             
-            # ATUALIZAÇÃO DE STATUS
-            if team['wins'] >= 3:
-                team['status'] = 'Classificado'
-            elif team['losses'] >= 3:
-                team['status'] = 'Eliminado'
+            # ATUALIZAÇÃO DE STATUS (Relevante principalmente para o Suíço)
+            if st.session_state.phase == 'swiss':
+                if team['wins'] >= 3:
+                    team['status'] = 'Classificado'
+                elif team['losses'] >= 3:
+                    team['status'] = 'Eliminado'
             break
 
 def render_sidebar_stats():
     """Função para mostrar o histórico detalhado na barra lateral"""
     with st.sidebar:
-        st.header("📊 Classificação")
+        st.header("📊 Classificação Geral")
         if st.session_state.teams:
             sorted_teams = get_sorted_rankings(st.session_state.teams, for_pairing=False)
             
@@ -79,7 +83,6 @@ def render_sidebar_stats():
             
             df = pd.DataFrame(display_data)
             
-            # Configuração visual da tabela para ficar compacta
             st.dataframe(
                 df, 
                 use_container_width=True, 
@@ -94,13 +97,9 @@ def render_sidebar_stats():
             )
             
             st.caption("GP: Gols Pró | GC: Gols Contra | SG: Saldo")
-            
-            # Legenda de Status
             st.markdown("---")
-            st.markdown("**Legenda de Status:**")
-            st.markdown("🟢 Classificado (3 Vitórias)")
-            st.markdown("🔴 Eliminado (3 Derrotas)")
-            st.markdown("⚪ Em Jogo")
+            st.markdown("**Legenda:**")
+            st.markdown("🟢 Classificado | 🔴 Eliminado | ⚪ Ativo")
 
 # --- LÓGICA DO SUIÇO ---
 
@@ -236,11 +235,13 @@ def advance_playoff_round(results, waiting_teams):
     
     if count == 2:
         next_round_name = "Grande Final"
-        pool = get_sorted_rankings(pool, for_pairing=False)
+        # Na final, não reordenamos por seed para manter a lógica de chaveamento, 
+        # mas se quiser purismo: pool = get_sorted_rankings(pool, for_pairing=False)
         next_matches = [{'id': 'F', 'home': pool[0], 'away': pool[1], 'label': 'Final'}]
         
     elif count == 4:
         next_round_name = "Semifinais"
+        # Reordenamos por seed para garantir cruzamento olímpico (1vs4, 2vs3)
         pool = get_sorted_rankings(pool, for_pairing=False)
         next_matches = [
             {'id': 'S1', 'home': pool[0], 'away': pool[3], 'label': 'Semi 1'},
@@ -332,7 +333,6 @@ elif st.session_state.phase == 'swiss':
         
         matches_data_input = []
         any_draw = False
-        
         disabled_score = st.session_state.swiss_asking_penalties
 
         for i, match in enumerate(matches):
@@ -341,13 +341,8 @@ elif st.session_state.phase == 'swiss':
             away_name = next(t['name'] for t in st.session_state.teams if t['id'] == match['away'])
             
             with c1: st.markdown(f"<h3 style='text-align: right'>{home_name}</h3>", unsafe_allow_html=True)
-            
-            # INPUTS NULOS (Vazios)
-            with c2: 
-                s1 = st.number_input("Gols", min_value=0, value=None, key=f"h_{round_idx}_{i}", disabled=disabled_score)
-            with c3: 
-                s2 = st.number_input("Gols", min_value=0, value=None, key=f"a_{round_idx}_{i}", disabled=disabled_score)
-            
+            with c2: s1 = st.number_input("Gols", min_value=0, value=None, key=f"h_{round_idx}_{i}", disabled=disabled_score)
+            with c3: s2 = st.number_input("Gols", min_value=0, value=None, key=f"a_{round_idx}_{i}", disabled=disabled_score)
             with c4: st.markdown(f"<h3>{away_name}</h3>", unsafe_allow_html=True)
             
             pen_h = 0
@@ -380,7 +375,6 @@ elif st.session_state.phase == 'swiss':
                 st.error("Por favor, preencha todos os placares do tempo normal.")
             else:
                 has_new_draw = False
-                
                 if not st.session_state.swiss_asking_penalties:
                     for item in matches_data_input:
                         if item['h_g'] == item['a_g']:
@@ -392,7 +386,6 @@ elif st.session_state.phase == 'swiss':
                     else:
                         if bye_team:
                             update_team_stats(bye_team['id'], 1, 0, is_winner=True, is_bye=True)
-                        
                         for item in matches_data_input:
                             winner_is_home = item['h_g'] > item['a_g']
                             update_team_stats(item['home_id'], item['h_g'], item['a_g'], is_winner=winner_is_home)
@@ -404,7 +397,6 @@ elif st.session_state.phase == 'swiss':
                         else:
                             generate_swiss_round()
                         st.rerun()
-                
                 else:
                     valid_penalties = True
                     for item in matches_data_input:
@@ -425,7 +417,6 @@ elif st.session_state.phase == 'swiss':
                         for item in matches_data_input:
                             hg, ag = item['h_g'], item['a_g']
                             hp, ap = item['h_p'], item['a_p']
-                            
                             if hg != ag:
                                 winner_is_home = hg > ag
                             else:
@@ -453,13 +444,17 @@ elif st.session_state.phase == 'playoff_gameplay':
                     st.write(f"{m['label']}: {m['home']['name']} {m['h_goals']} x {m['a_goals']} {m['away']['name']}{penalties_txt} -> Vencedor: {winner_name}")
 
     current_round = st.session_state.playoff_schedule[-1]
+    
+    # ID Único da Rodada para limpar inputs
+    round_id = len(st.session_state.playoff_schedule)
+    
     st.markdown(f"### ⚡ Em andamento: {current_round['name']}")
     
     if current_round['waiting']:
         names_waiting = ", ".join([t['name'] for t in current_round['waiting']])
         st.info(f"🛑 Times aguardando na próxima fase (Byes): **{names_waiting}**")
     
-    with st.form(key=f"playoff_act_{len(st.session_state.playoff_schedule)}"):
+    with st.form(key=f"playoff_form_{round_id}"):
         matches_data_input = []
         any_draw = False
 
@@ -475,11 +470,12 @@ elif st.session_state.phase == 'playoff_gameplay':
             
             with col1: st.markdown(f"<h3 style='text-align: right'>{home['name']}</h3>", unsafe_allow_html=True)
             
+            # CHAVES COM ROUND_ID PARA LIMPAR NO PROXIMO ROUND
             with col2: 
-                val_h = st.number_input("Gols", min_value=0, value=None, key=f"pg_h_{i}", disabled=disabled_score)
+                val_h = st.number_input("Gols", min_value=0, value=None, key=f"pg_h_{round_id}_{i}", disabled=disabled_score)
             with col3: st.markdown("<h3 style='text-align: center'>X</h3>", unsafe_allow_html=True)
             with col4: 
-                val_a = st.number_input("Gols", min_value=0, value=None, key=f"pg_a_{i}", disabled=disabled_score)
+                val_a = st.number_input("Gols", min_value=0, value=None, key=f"pg_a_{round_id}_{i}", disabled=disabled_score)
             with col5: st.markdown(f"<h3>{away['name']}</h3>", unsafe_allow_html=True)
             
             pen_h = 0
@@ -488,8 +484,8 @@ elif st.session_state.phase == 'playoff_gameplay':
             if st.session_state.playoff_asking_penalties and val_h is not None and val_a is not None and val_h == val_a:
                 st.warning("⚠️ Empate! Insira os pênaltis:")
                 cp1, cp2 = st.columns(2)
-                with cp1: pen_h = st.number_input(f"Pênaltis {home['name']}", min_value=0, value=None, key=f"pen_h_{i}")
-                with cp2: pen_a = st.number_input(f"Pênaltis {away['name']}", min_value=0, value=None, key=f"pen_a_{i}")
+                with cp1: pen_h = st.number_input(f"Pênaltis {home['name']}", min_value=0, value=None, key=f"pen_h_{round_id}_{i}")
+                with cp2: pen_a = st.number_input(f"Pênaltis {away['name']}", min_value=0, value=None, key=f"pen_a_{round_id}_{i}")
                 any_draw = True
             
             matches_data_input.append({
@@ -530,9 +526,15 @@ elif st.session_state.phase == 'playoff_gameplay':
                             m['is_penalties'] = False
                             m['h_pen'] = 0
                             m['a_pen'] = 0
+                            
+                            # Define vencedor
                             w = m['home'] if item['h_g'] > item['a_g'] else m['away']
                             m['winner_id'] = w['id']
                             winners.append(w)
+                            
+                            # ATUALIZA ESTATÍSTICAS (Soma ao total do time)
+                            update_team_stats(m['home']['id'], item['h_g'], item['a_g'], is_winner=(w['id'] == m['home']['id']))
+                            update_team_stats(m['away']['id'], item['a_g'], item['h_g'], is_winner=(w['id'] == m['away']['id']))
                         
                         current_round['completed'] = True
                         advance_playoff_round(winners, current_round['waiting'])
@@ -568,6 +570,10 @@ elif st.session_state.phase == 'playoff_gameplay':
                             
                             m['winner_id'] = w['id']
                             winners.append(w)
+                            
+                            # ATUALIZA ESTATÍSTICAS (Mesmo com penaltis, soma gols do tempo normal)
+                            update_team_stats(m['home']['id'], item['h_g'], item['a_g'], is_winner=(w['id'] == m['home']['id']))
+                            update_team_stats(m['away']['id'], item['a_g'], item['h_g'], is_winner=(w['id'] == m['away']['id']))
                         
                         current_round['completed'] = True
                         advance_playoff_round(winners, current_round['waiting'])
@@ -577,16 +583,30 @@ elif st.session_state.phase == 'champion':
     st.balloons()
     champ = st.session_state.champion
     
+    # Calcula gols sofridos para exibição
+    goals_against = champ['goals_for'] - champ['goal_diff']
+
     st.markdown(f"""
     <div style="text-align: center; padding: 50px;">
         <h1>🏆 CAMPEÃO! 🏆</h1>
-        <h2 style="color: gold; font-size: 80px;">{champ['name']}</h2>
+        <h2 style="color: gold; font-size: 90px; margin: 0;">{champ['name']}</h2>
     </div>
     """, unsafe_allow_html=True)
     
-    st.markdown("### Trajetória do Campeão")
-    st.write(f"Vitórias: {champ['wins']} | Derrotas: {champ['losses']}")
+    st.markdown("### 📊 Estatísticas Finais da Campanha")
     
+    # CARD DE ESTATÍSTICAS FINAL
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("Vitórias Totais", champ['wins'])
+    with c2:
+        st.metric("Gols Pró", champ['goals_for'])
+    with c3:
+        st.metric("Gols Sofridos", goals_against)
+    with c4:
+        st.metric("Saldo Final", champ['goal_diff'])
+    
+    st.markdown("---")
     if st.button("Reiniciar Torneio"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
