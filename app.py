@@ -29,7 +29,6 @@ def get_sorted_rankings(teams, for_pairing=False):
     Retorna a lista de times ordenada por mérito.
     """
     if for_pairing:
-        # Cria uma cópia para não bagunçar a lista original com o shuffle
         teams = teams.copy()
         random.shuffle(teams)
     
@@ -56,7 +55,7 @@ def update_team_stats(team_id, goals_scored, goals_conceded, is_winner, is_bye=F
             else:
                 team['losses'] += 1
             
-            # FORÇA A MARCAÇÃO DO BYE
+            # Grava permanentemente que recebeu Bye
             if is_bye:
                 team['received_bye'] = True
             
@@ -83,6 +82,7 @@ def render_sidebar_stats():
             current_bye_id = None
             if st.session_state.phase == 'swiss' and st.session_state.rounds:
                 curr = st.session_state.rounds[-1]
+                # Se a rodada tem um bye definido
                 if curr.get('bye'):
                     current_bye_id = curr['bye']['id']
 
@@ -96,10 +96,15 @@ def render_sidebar_stats():
                 else:
                     status_icon = "⚪"
 
-                # Marcador visual de folga atual
                 name_display = t['name']
-                if current_bye_id and t['id'] == current_bye_id:
+                is_current_bye = (current_bye_id and t['id'] == current_bye_id)
+
+                # Marcador visual de folga atual no nome
+                if is_current_bye:
                     name_display += " (Folga)"
+
+                # CORREÇÃO: A coluna 'Bye' marca 'Sim' se já teve no passado OU se tem agora
+                bye_status_display = 'Sim' if (t['received_bye'] or is_current_bye) else '-'
 
                 # Cálculo de gols contra
                 goals_against = t['goals_for'] - t['goal_diff']
@@ -108,7 +113,7 @@ def render_sidebar_stats():
                     'St': status_icon,
                     'Time': name_display,
                     'V-D': f"{t['wins']}-{t['losses']}",
-                    'Bye': 'Sim' if t['received_bye'] else '-', 
+                    'Bye': bye_status_display, 
                     'GP': t['goals_for'],
                     'GC': goals_against,
                     'SG': t['goal_diff']
@@ -320,7 +325,7 @@ def advance_playoff_round(results, waiting_teams):
 def add_team_callback():
     new_team = st.session_state.team_input
     if new_team and new_team not in [t['name'] for t in st.session_state.teams]:
-        # CORREÇÃO CRÍTICA DE ID: Usa Max ID + 1 para evitar duplicidade ao remover
+        # Geração de ID seguro
         existing_ids = [t['id'] for t in st.session_state.teams]
         new_id = (max(existing_ids) + 1) if existing_ids else 1
         
@@ -404,6 +409,7 @@ elif st.session_state.phase == 'swiss':
             
             with c1: st.markdown(f"<h3 style='text-align: right'>{home_name}</h3>", unsafe_allow_html=True)
             
+            # INPUTS NULOS (Vazios)
             with c2: 
                 s1 = st.number_input("Gols", min_value=0, value=None, key=f"h_{round_idx}_{i}", disabled=disabled_score)
             with c3: 
