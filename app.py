@@ -138,28 +138,55 @@ def render_sidebar_stats():
 def generate_swiss_round():
     st.session_state.swiss_asking_penalties = False 
     
+    # Filtra apenas times ativos
     active_teams = [t for t in st.session_state.teams if t['status'] == 'Ativo']
-    random.shuffle(active_teams) 
     
+    # ---------------------------------------------------------
+    # NOVA LÓGICA DE BYE: SORTEIO ENTRE PERDEDORES
+    # ---------------------------------------------------------
     bye_team = None
+    
+    # Só precisa de Bye se for ímpar
     if len(active_teams) % 2 != 0:
-        worst_sorted = sorted(active_teams, key=lambda x: (
-            x['wins'], 
-            not x['received_bye'], 
-            x['goal_diff']
-        ))
+        eligible_for_bye = [t for t in active_teams if not t['received_bye']]
+        candidates = []
         
-        for t in worst_sorted:
-            if not t['received_bye']:
-                bye_team = t
-                break
-        
-        if not bye_team and worst_sorted:
-            bye_team = worst_sorted[0]
+        # Cenário 1: Primeira Rodada (Ninguém perdeu ainda) -> Sorteio Geral
+        if not st.session_state.rounds:
+            candidates = eligible_for_bye
             
-        if bye_team:
+        else:
+            # Cenário 2: Rodadas Seguintes -> Filtrar Perdedores da rodada anterior
+            last_round = st.session_state.rounds[-1]
+            loser_ids = []
+            
+            # Varre os jogos da rodada anterior para achar os perdedores
+            for m in last_round['matches']:
+                # O ID do vencedor foi salvo no momento do 'submit' da rodada anterior
+                winner_id = m.get('winner_id')
+                if winner_id:
+                    # Se teve vencedor, o outro é o perdedor
+                    loser = m['away'] if winner_id == m['home'] else m['home']
+                    loser_ids.append(loser)
+            
+            # Candidatos são: Elegíveis (sem bye) QUE TAMBÉM perderam na última
+            loser_candidates = [t for t in eligible_for_bye if t['id'] in loser_ids]
+            
+            if loser_candidates:
+                candidates = loser_candidates
+            else:
+                # Fallback: Se todos os perdedores já tiveram bye (ou se só teve empate/bye na anterior),
+                # sorteia entre qualquer elegível para não travar.
+                candidates = eligible_for_bye
+        
+        # Sorteia 1 entre os candidatos
+        if candidates:
+            bye_team = random.choice(candidates)
             active_teams.remove(bye_team)
-
+    
+    # ---------------------------------------------------------
+    
+    # PAREAMENTO (Mantido igual)
     ranked_pool = get_sorted_rankings(active_teams, for_pairing=True)
     matches = []
     
@@ -258,7 +285,6 @@ def init_playoffs():
 def advance_playoff_round(results, waiting_teams, losers=None):
     st.session_state.playoff_asking_penalties = False 
     
-    # Identifica qual rodada acabou de ser concluída
     last_round = st.session_state.playoff_schedule[-1]
     last_round_name = last_round['name']
 
@@ -268,9 +294,8 @@ def advance_playoff_round(results, waiting_teams, losers=None):
     next_matches = []
     next_round_name = ""
     
-    # --- LOGICA DE FINALIZAÇÃO (Se acabou a rodada 'Finais') ---
+    # --- LOGICA DE FINALIZAÇÃO ---
     if last_round_name == "Finais":
-        # Procura quem ganhou a partida identificada como 'FINAL'
         champion = None
         for m in last_round['matches']:
             if m['id'] == 'FINAL':
@@ -284,12 +309,11 @@ def advance_playoff_round(results, waiting_teams, losers=None):
             st.session_state.phase = 'champion'
             return
 
-    # --- LÓGICA DE CRIAÇÃO DA FINAL + 3º LUGAR ---
-    # Se viemos das "Semifinais" (2 jogos) e temos perdedores
+    # --- DISPUTA DE 3º LUGAR ---
     if last_round_name == "Semifinais" and losers and len(losers) == 2:
         next_round_name = "Finais"
         
-        # 1. Grande Final (Vencedores das Semis)
+        # Grande Final
         pool = get_sorted_rankings(pool, for_pairing=False)
         next_matches.append({
             'id': 'FINAL', 
@@ -297,7 +321,7 @@ def advance_playoff_round(results, waiting_teams, losers=None):
             'label': '🏆 Grande Final'
         })
         
-        # 2. Disputa de 3º Lugar (Perdedores das Semis)
+        # 3º Lugar
         losers = get_sorted_rankings(losers, for_pairing=False)
         next_matches.append({
             'id': '3RD', 
@@ -305,9 +329,7 @@ def advance_playoff_round(results, waiting_teams, losers=None):
             'label': '🥉 Disputa de 3º Lugar'
         })
 
-    # --- LÓGICA PADRÃO PARA OUTRAS FASES ---
     elif count == 2:
-        # Caso de torneio com 3 times ou fallback
         next_round_name = "Grande Final"
         next_matches = [{'id': 'F', 'home': pool[0], 'away': pool[1], 'label': 'Final'}]
         
@@ -326,13 +348,11 @@ def advance_playoff_round(results, waiting_teams, losers=None):
             away = pool.pop(-1)
             next_matches.append({'id': 'GEN', 'home': home, 'away': away, 'label': 'Jogo'})
             
-    # Finalização para torneios pequenos (3 times) onde só há 1 jogo de final
     if not next_matches and count == 1:
         st.session_state.champion = pool[0]
         st.session_state.phase = 'champion'
         return
 
-    # Inicializa scores zerados para a nova rodada
     for m in next_matches:
         m['h_goals'] = 0
         m['a_goals'] = 0
@@ -479,10 +499,17 @@ elif st.session_state.phase == 'swiss':
                         st.session_state.swiss_asking_penalties = True
                         st.rerun()
                     else:
+                        # PROCESSAMENTO SEM PÊNALTIS (Vitória Normal)
                         if bye_team:
                             update_team_stats(bye_team['id'], 1, 0, is_winner=True, is_bye=True)
+                        
                         for item in matches_data_input:
                             winner_is_home = item['h_g'] > item['a_g']
+                            
+                            # SALVAR VENCEDOR PARA LÓGICA DE BYE DA PRÓXIMA RODADA
+                            w_id = item['home_id'] if winner_is_home else item['away_id']
+                            current_round['matches'][item['match_idx']]['winner_id'] = w_id
+                            
                             update_team_stats(item['home_id'], item['h_g'], item['a_g'], is_winner=winner_is_home)
                             update_team_stats(item['away_id'], item['a_g'], item['h_g'], is_winner=not winner_is_home)
                         
@@ -493,6 +520,7 @@ elif st.session_state.phase == 'swiss':
                             generate_swiss_round()
                         st.rerun()
                 else:
+                    # PROCESSAMENTO COM PÊNALTIS
                     valid_penalties = True
                     for item in matches_data_input:
                         if item['h_g'] == item['a_g']:
@@ -516,6 +544,10 @@ elif st.session_state.phase == 'swiss':
                                 winner_is_home = hg > ag
                             else:
                                 winner_is_home = hp > ap
+                            
+                            # SALVAR VENCEDOR PARA LÓGICA DE BYE DA PRÓXIMA RODADA
+                            w_id = item['home_id'] if winner_is_home else item['away_id']
+                            current_round['matches'][item['match_idx']]['winner_id'] = w_id
                             
                             update_team_stats(item['home_id'], hg, ag, is_winner=winner_is_home)
                             update_team_stats(item['away_id'], ag, hg, is_winner=not winner_is_home)
@@ -601,7 +633,7 @@ elif st.session_state.phase == 'playoff_gameplay':
             else:
                 has_new_draw = False
                 winners = []
-                losers = [] # LISTA PARA ARMAZENAR PERDEDORES (3º LUGAR)
+                losers = [] 
                 
                 if not st.session_state.playoff_asking_penalties:
                     for item in matches_data_input:
@@ -629,13 +661,13 @@ elif st.session_state.phase == 'playoff_gameplay':
                                 
                             m['winner_id'] = w['id']
                             winners.append(w)
-                            losers.append(l) # Salva o perdedor
+                            losers.append(l)
                             
                             update_team_stats(m['home']['id'], item['h_g'], item['a_g'], is_winner=(w['id'] == m['home']['id']))
                             update_team_stats(m['away']['id'], item['a_g'], item['h_g'], is_winner=(w['id'] == m['away']['id']))
                         
                         current_round['completed'] = True
-                        advance_playoff_round(winners, current_round['waiting'], losers=losers) # Passa perdedores
+                        advance_playoff_round(winners, current_round['waiting'], losers=losers)
                         st.rerun()
                 else:
                     valid_penalties = True
@@ -676,13 +708,13 @@ elif st.session_state.phase == 'playoff_gameplay':
                             
                             m['winner_id'] = w['id']
                             winners.append(w)
-                            losers.append(l) # Salva o perdedor
+                            losers.append(l) 
                             
                             update_team_stats(m['home']['id'], item['h_g'], item['a_g'], is_winner=(w['id'] == m['home']['id']))
                             update_team_stats(m['away']['id'], item['a_g'], item['h_g'], is_winner=(w['id'] == m['away']['id']))
                         
                         current_round['completed'] = True
-                        advance_playoff_round(winners, current_round['waiting'], losers=losers) # Passa perdedores
+                        advance_playoff_round(winners, current_round['waiting'], losers=losers)
                         st.rerun()
 
 elif st.session_state.phase == 'champion':
