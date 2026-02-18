@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import random
+import io
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Gestor de Torneio Suíço", layout="wide")
@@ -70,6 +71,83 @@ def update_team_stats(team_id, goals_scored, goals_conceded, is_winner, is_bye=F
     if not found:
         st.error(f"Erro Crítico: Tentativa de atualizar time ID {team_id} que não existe.")
 
+def convert_df_to_csv(df):
+    return df.to_csv(index=False).encode('utf-8')
+
+def generate_export_data():
+    """Gera dataframes para exportação"""
+    # 1. Tabela Geral
+    if st.session_state.teams:
+        sorted_teams = get_sorted_rankings(st.session_state.teams, for_pairing=False)
+        rank_data = []
+        for t in sorted_teams:
+            rank_data.append({
+                'Time': t['name'],
+                'Vitorias': t['wins'],
+                'Derrotas': t['losses'],
+                'Saldo': t['goal_diff'],
+                'Gols Pro': t['goals_for'],
+                'Status': t['status'],
+                'Recebeu Bye': 'Sim' if t['received_bye'] else 'Não'
+            })
+        df_rank = pd.DataFrame(rank_data)
+    else:
+        df_rank = pd.DataFrame()
+
+    # 2. Histórico de Partidas
+    match_history = []
+    
+    # Fase Suíça
+    for i, r in enumerate(st.session_state.rounds):
+        # Só exporta rodadas finalizadas
+        if r.get('completed'): 
+            if r['bye']:
+                match_history.append({
+                    'Fase': 'Suíça', 'Rodada': i+1, 
+                    'Mandante': r['bye']['name'], 'Placar M': 1, 'Placar V': 0, 'Visitante': 'BYE (Folga)',
+                    'Vencedor': r['bye']['name'], 'Notas': 'Vitória automática por Bye'
+                })
+            
+            for m in r['matches']:
+                # Busca nomes (Ids são fixos)
+                h_name = next((t['name'] for t in st.session_state.teams if t['id'] == m['home']), "Time A")
+                a_name = next((t['name'] for t in st.session_state.teams if t['id'] == m['away']), "Time B")
+                
+                winner_name = "Empate"
+                if 'winner_id' in m:
+                    winner_name = h_name if m['winner_id'] == m['home'] else a_name
+                
+                # Verifica se teve penaltis (no suiço a gente salva só score normal, mas a vitória define quem levou)
+                match_history.append({
+                    'Fase': 'Suíça', 'Rodada': i+1,
+                    'Mandante': h_name, 'Placar M': m['home_score'], 
+                    'Placar V': m['away_score'], 'Visitante': a_name,
+                    'Vencedor': winner_name, 'Notas': ''
+                })
+
+    # Fase Mata-Mata
+    for r in st.session_state.playoff_schedule:
+        if r['completed']:
+            for m in r['matches']:
+                h_name = m['home']['name']
+                a_name = m['away']['name']
+                winner_name = h_name if m.get('winner_id') == m['home']['id'] else a_name
+                
+                note = ""
+                if m.get('is_penalties'):
+                    note = f"Pênaltis: {m['h_pen']} x {m['a_pen']}"
+                
+                match_history.append({
+                    'Fase': 'Mata-Mata', 'Rodada': r['name'],
+                    'Mandante': h_name, 'Placar M': m['h_goals'],
+                    'Placar V': m['a_goals'], 'Visitante': a_name,
+                    'Vencedor': winner_name, 'Notas': note
+                })
+                
+    df_matches = pd.DataFrame(match_history)
+    
+    return df_rank, df_matches
+
 def render_sidebar_stats():
     """Função para mostrar o ranking e o histórico na barra lateral"""
     with st.sidebar:
@@ -81,7 +159,8 @@ def render_sidebar_stats():
             current_bye_id = None
             if st.session_state.phase == 'swiss' and st.session_state.rounds:
                 curr = st.session_state.rounds[-1]
-                if curr.get('bye'):
+                # Só mostra 'Folga' se a rodada ainda não acabou
+                if curr.get('bye') and not curr.get('completed'):
                     current_bye_id = curr['bye']['id']
 
             display_data = []
@@ -134,35 +213,62 @@ def render_sidebar_stats():
         
         st.markdown("---")
         
+        # --- EXPORTAR DADOS ---
+        st.header("💾 Exportar Dados")
+        if st.session_state.teams:
+            df_r, df_m = generate_export_data()
+            
+            # Botão Tabela
+            csv_rank = convert_df_to_csv(df_r)
+            st.download_button(
+                label="📥 Baixar Classificação (CSV)",
+                data=csv_rank,
+                file_name='classificacao_torneio.csv',
+                mime='text/csv',
+            )
+            
+            # Botão Partidas
+            if not df_m.empty:
+                csv_matches = convert_df_to_csv(df_m)
+                st.download_button(
+                    label="📥 Baixar Histórico de Jogos (CSV)",
+                    data=csv_matches,
+                    file_name='historico_partidas.csv',
+                    mime='text/csv',
+                )
+
+        st.markdown("---")
+        
         # --- HISTÓRICO DE RODADAS (LOG) ---
         st.header("📜 Histórico de Jogos")
         
         # 1. Histórico Fase Suíça
         if st.session_state.rounds:
             st.markdown("##### Fase Suíça")
+            found_completed = False
             for i, r in enumerate(st.session_state.rounds):
-                with st.expander(f"Rodada {i+1}", expanded=False):
-                    if r['bye']:
-                        st.info(f"**Bye:** {r['bye']['name']}")
-                    for m in r['matches']:
-                        # Busca nomes para exibir (pois ID é fixo, nome pode ter mudado no código mas aqui pegamos do session)
-                        # Como não salvamos o nome no objeto 'match' antigo, buscamos pelo ID
-                        h_name = next((t['name'] for t in st.session_state.teams if t['id'] == m['home']), "Time A")
-                        a_name = next((t['name'] for t in st.session_state.teams if t['id'] == m['away']), "Time B")
-                        
-                        # Verifica se teve vencedor definido (rodada concluida)
-                        winner_mark = ""
-                        if 'winner_id' in m:
-                            if m['winner_id'] == m['home']: winner_mark = " (V)"
-                            elif m['winner_id'] == m['away']: winner_mark = " (V)" # Lógica visual simplificada
-                        
-                        st.write(f"{h_name} **{m['home_score']} x {m['away_score']}** {a_name}")
+                # CORREÇÃO: Só mostra no histórico se completed=True
+                if r.get('completed'):
+                    found_completed = True
+                    with st.expander(f"Rodada {i+1}", expanded=False):
+                        if r['bye']:
+                            st.info(f"**Bye:** {r['bye']['name']}")
+                        for m in r['matches']:
+                            h_name = next((t['name'] for t in st.session_state.teams if t['id'] == m['home']), "Time A")
+                            a_name = next((t['name'] for t in st.session_state.teams if t['id'] == m['away']), "Time B")
+                            
+                            # Mostra o placar QUE FOI SALVO
+                            st.write(f"{h_name} **{m['home_score']} x {m['away_score']}** {a_name}")
+            if not found_completed:
+                st.caption("Nenhuma rodada finalizada ainda.")
 
         # 2. Histórico Mata-Mata
         if st.session_state.playoff_schedule:
             st.markdown("##### Mata-Mata")
+            found_completed = False
             for r in st.session_state.playoff_schedule:
                 if r['completed']:
+                    found_completed = True
                     with st.expander(f"{r['name']}", expanded=False):
                         for m in r['matches']:
                             h_name = m['home']['name']
@@ -174,6 +280,8 @@ def render_sidebar_stats():
                             
                             winner_name = "**" + (h_name if m.get('winner_id') == m['home']['id'] else a_name) + "**"
                             st.write(f"{h_name} {m['h_goals']} x {m['a_goals']} {a_name}{pen_txt} -> {winner_name}")
+            if not found_completed:
+                st.caption("Fase final em andamento.")
 
 # --- LÓGICA DO SUIÇO ---
 
@@ -182,9 +290,7 @@ def generate_swiss_round():
     
     active_teams = [t for t in st.session_state.teams if t['status'] == 'Ativo']
     
-    # ---------------------------------------------------------
     # LÓGICA DE BYE: SORTEIO ENTRE PERDEDORES
-    # ---------------------------------------------------------
     bye_team = None
     
     if len(active_teams) % 2 != 0:
@@ -217,8 +323,6 @@ def generate_swiss_round():
             bye_team = random.choice(candidates)
             active_teams.remove(bye_team)
     
-    # ---------------------------------------------------------
-    
     ranked_pool = get_sorted_rankings(active_teams, for_pairing=True)
     matches = []
     
@@ -241,7 +345,8 @@ def generate_swiss_round():
         home['history'].append(opponent['id'])
         opponent['history'].append(home['id'])
 
-    st.session_state.rounds.append({'matches': matches, 'bye': bye_team})
+    # CRIA A RODADA COM STATUS INCOMPLETO
+    st.session_state.rounds.append({'matches': matches, 'bye': bye_team, 'completed': False})
 
 # --- LÓGICA DO MATA-MATA ---
 
@@ -332,14 +437,11 @@ def advance_playoff_round(results, waiting_teams, losers=None):
         vice = None
         third = None
         
-        # Identifica Campeão, Vice e Terceiro
         for m in last_round['matches']:
-            # Pega vencedor e perdedor do jogo
             winner_id = m.get('winner_id')
             winner_obj = None
             loser_obj = None
             
-            # Reconstrói objetos time
             if winner_id == m['home']['id']:
                 winner_obj = m['home']
                 loser_obj = m['away']
@@ -355,8 +457,8 @@ def advance_playoff_round(results, waiting_teams, losers=None):
                 
         if champion:
             st.session_state.champion = champion
-            st.session_state.vice = vice # Armazena vice
-            st.session_state.third = third # Armazena terceiro
+            st.session_state.vice = vice 
+            st.session_state.third = third 
             st.session_state.phase = 'champion'
             return
 
@@ -548,16 +650,24 @@ elif st.session_state.phase == 'swiss':
                         st.session_state.swiss_asking_penalties = True
                         st.rerun()
                     else:
+                        # PROCESSAMENTO NORMAL
                         if bye_team:
                             update_team_stats(bye_team['id'], 1, 0, is_winner=True, is_bye=True)
                         
                         for item in matches_data_input:
                             winner_is_home = item['h_g'] > item['a_g']
                             w_id = item['home_id'] if winner_is_home else item['away_id']
+                            
+                            # --- CORREÇÃO: GRAVAR PLACAR NO HISTÓRICO ---
+                            current_round['matches'][item['match_idx']]['home_score'] = item['h_g']
+                            current_round['matches'][item['match_idx']]['away_score'] = item['a_g']
                             current_round['matches'][item['match_idx']]['winner_id'] = w_id
                             
                             update_team_stats(item['home_id'], item['h_g'], item['a_g'], is_winner=winner_is_home)
                             update_team_stats(item['away_id'], item['a_g'], item['h_g'], is_winner=not winner_is_home)
+                        
+                        # Marca rodada como concluída para o histórico
+                        current_round['completed'] = True
                         
                         active_count = len([t for t in st.session_state.teams if t['status'] == 'Ativo'])
                         if active_count <= 1:
@@ -566,6 +676,7 @@ elif st.session_state.phase == 'swiss':
                             generate_swiss_round()
                         st.rerun()
                 else:
+                    # PROCESSAMENTO PÊNALTIS
                     valid_penalties = True
                     for item in matches_data_input:
                         if item['h_g'] == item['a_g']:
@@ -591,11 +702,17 @@ elif st.session_state.phase == 'swiss':
                                 winner_is_home = hp > ap
                             
                             w_id = item['home_id'] if winner_is_home else item['away_id']
+                            
+                            # --- CORREÇÃO: GRAVAR PLACAR NO HISTÓRICO ---
+                            current_round['matches'][item['match_idx']]['home_score'] = hg
+                            current_round['matches'][item['match_idx']]['away_score'] = ag
                             current_round['matches'][item['match_idx']]['winner_id'] = w_id
                             
                             update_team_stats(item['home_id'], hg, ag, is_winner=winner_is_home)
                             update_team_stats(item['away_id'], ag, hg, is_winner=not winner_is_home)
 
+                        current_round['completed'] = True
+                        
                         active_count = len([t for t in st.session_state.teams if t['status'] == 'Ativo'])
                         if active_count <= 1:
                             init_playoffs()
@@ -773,10 +890,9 @@ elif st.session_state.phase == 'champion':
     </div>
     """, unsafe_allow_html=True)
     
-    # --- PÓDIO (NOVO) ---
     c1, c2, c3 = st.columns(3)
     
-    with c2: # Campeão no meio (maior)
+    with c2: # Campeão
         st.markdown(f"""
         <div style="text-align: center; background-color: #FFD700; padding: 20px; border-radius: 10px; color: black;">
             <h2>🥇 CAMPEÃO</h2>
@@ -802,7 +918,6 @@ elif st.session_state.phase == 'champion':
             </div>
             """, unsafe_allow_html=True)
 
-    # Estatísticas
     st.markdown("---")
     st.markdown("### 📊 Estatísticas do Campeão")
     goals_against = champ['goals_for'] - champ['goal_diff']
