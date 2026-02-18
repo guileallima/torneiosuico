@@ -76,7 +76,6 @@ def convert_df_to_csv(df):
 
 def generate_export_data():
     """Gera dataframes para exportação"""
-    # 1. Tabela Geral
     if st.session_state.teams:
         sorted_teams = get_sorted_rankings(st.session_state.teams, for_pairing=False)
         rank_data = []
@@ -94,12 +93,10 @@ def generate_export_data():
     else:
         df_rank = pd.DataFrame()
 
-    # 2. Histórico de Partidas
     match_history = []
     
     # Fase Suíça
     for i, r in enumerate(st.session_state.rounds):
-        # Só exporta rodadas finalizadas
         if r.get('completed'): 
             if r['bye']:
                 match_history.append({
@@ -109,7 +106,6 @@ def generate_export_data():
                 })
             
             for m in r['matches']:
-                # Busca nomes (Ids são fixos)
                 h_name = next((t['name'] for t in st.session_state.teams if t['id'] == m['home']), "Time A")
                 a_name = next((t['name'] for t in st.session_state.teams if t['id'] == m['away']), "Time B")
                 
@@ -117,7 +113,6 @@ def generate_export_data():
                 if 'winner_id' in m:
                     winner_name = h_name if m['winner_id'] == m['home'] else a_name
                 
-                # Verifica se teve penaltis (no suiço a gente salva só score normal, mas a vitória define quem levou)
                 match_history.append({
                     'Fase': 'Suíça', 'Rodada': i+1,
                     'Mandante': h_name, 'Placar M': m['home_score'], 
@@ -159,7 +154,6 @@ def render_sidebar_stats():
             current_bye_id = None
             if st.session_state.phase == 'swiss' and st.session_state.rounds:
                 curr = st.session_state.rounds[-1]
-                # Só mostra 'Folga' se a rodada ainda não acabou
                 if curr.get('bye') and not curr.get('completed'):
                     current_bye_id = curr['bye']['id']
 
@@ -218,7 +212,6 @@ def render_sidebar_stats():
         if st.session_state.teams:
             df_r, df_m = generate_export_data()
             
-            # Botão Tabela
             csv_rank = convert_df_to_csv(df_r)
             st.download_button(
                 label="📥 Baixar Classificação (CSV)",
@@ -227,7 +220,6 @@ def render_sidebar_stats():
                 mime='text/csv',
             )
             
-            # Botão Partidas
             if not df_m.empty:
                 csv_matches = convert_df_to_csv(df_m)
                 st.download_button(
@@ -242,12 +234,10 @@ def render_sidebar_stats():
         # --- HISTÓRICO DE RODADAS (LOG) ---
         st.header("📜 Histórico de Jogos")
         
-        # 1. Histórico Fase Suíça
         if st.session_state.rounds:
             st.markdown("##### Fase Suíça")
             found_completed = False
             for i, r in enumerate(st.session_state.rounds):
-                # CORREÇÃO: Só mostra no histórico se completed=True
                 if r.get('completed'):
                     found_completed = True
                     with st.expander(f"Rodada {i+1}", expanded=False):
@@ -257,12 +247,10 @@ def render_sidebar_stats():
                             h_name = next((t['name'] for t in st.session_state.teams if t['id'] == m['home']), "Time A")
                             a_name = next((t['name'] for t in st.session_state.teams if t['id'] == m['away']), "Time B")
                             
-                            # Mostra o placar QUE FOI SALVO
                             st.write(f"{h_name} **{m['home_score']} x {m['away_score']}** {a_name}")
             if not found_completed:
                 st.caption("Nenhuma rodada finalizada ainda.")
 
-        # 2. Histórico Mata-Mata
         if st.session_state.playoff_schedule:
             st.markdown("##### Mata-Mata")
             found_completed = False
@@ -288,21 +276,23 @@ def render_sidebar_stats():
 def generate_swiss_round():
     st.session_state.swiss_asking_penalties = False 
     
-    active_teams = [t for t in st.session_state.teams if t['status'] == 'Ativo']
+    # --- CORREÇÃO ZOMBIE BYE: Filtra apenas quem tem MENOS de 3 derrotas ---
+    active_teams = [t for t in st.session_state.teams if t['status'] == 'Ativo' and t['losses'] < 3]
     
     # LÓGICA DE BYE: SORTEIO ENTRE PERDEDORES
     bye_team = None
     
     if len(active_teams) % 2 != 0:
+        # Só considera elegível quem ainda não teve bye E tem menos de 3 derrotas
         eligible_for_bye = [t for t in active_teams if not t['received_bye']]
         candidates = []
         
-        # Cenário 1: Primeira Rodada (Ninguém perdeu ainda) -> Sorteio Geral
+        # Cenário 1: Primeira Rodada
         if not st.session_state.rounds:
             candidates = eligible_for_bye
             
         else:
-            # Cenário 2: Rodadas Seguintes -> Filtrar Perdedores da rodada anterior
+            # Cenário 2: Filtrar Perdedores da rodada anterior
             last_round = st.session_state.rounds[-1]
             loser_ids = []
             
@@ -345,7 +335,6 @@ def generate_swiss_round():
         home['history'].append(opponent['id'])
         opponent['history'].append(home['id'])
 
-    # CRIA A RODADA COM STATUS INCOMPLETO
     st.session_state.rounds.append({'matches': matches, 'bye': bye_team, 'completed': False})
 
 # --- LÓGICA DO MATA-MATA ---
@@ -353,6 +342,11 @@ def generate_swiss_round():
 def init_playoffs():
     qualified = [t for t in st.session_state.teams if t['status'] == 'Classificado']
     seeds = get_sorted_rankings(qualified, for_pairing=False) 
+    
+    # --- CORREÇÃO HARD CAP: Limite máximo de 8 classificados ---
+    if len(seeds) > 8:
+        st.toast(f"⚠️ Atenção: {len(seeds)} times classificados. Apenas os 8 melhores avançam.")
+        seeds = seeds[:8]
     
     num_q = len(seeds)
     current_matches = []
@@ -650,23 +644,21 @@ elif st.session_state.phase == 'swiss':
                         st.session_state.swiss_asking_penalties = True
                         st.rerun()
                     else:
-                        # PROCESSAMENTO NORMAL
                         if bye_team:
                             update_team_stats(bye_team['id'], 1, 0, is_winner=True, is_bye=True)
                         
                         for item in matches_data_input:
                             winner_is_home = item['h_g'] > item['a_g']
                             w_id = item['home_id'] if winner_is_home else item['away_id']
+                            current_round['matches'][item['match_idx']]['winner_id'] = w_id
                             
-                            # --- CORREÇÃO: GRAVAR PLACAR NO HISTÓRICO ---
+                            # SALVA NO HISTORICO
                             current_round['matches'][item['match_idx']]['home_score'] = item['h_g']
                             current_round['matches'][item['match_idx']]['away_score'] = item['a_g']
-                            current_round['matches'][item['match_idx']]['winner_id'] = w_id
                             
                             update_team_stats(item['home_id'], item['h_g'], item['a_g'], is_winner=winner_is_home)
                             update_team_stats(item['away_id'], item['a_g'], item['h_g'], is_winner=not winner_is_home)
                         
-                        # Marca rodada como concluída para o histórico
                         current_round['completed'] = True
                         
                         active_count = len([t for t in st.session_state.teams if t['status'] == 'Ativo'])
@@ -676,7 +668,6 @@ elif st.session_state.phase == 'swiss':
                             generate_swiss_round()
                         st.rerun()
                 else:
-                    # PROCESSAMENTO PÊNALTIS
                     valid_penalties = True
                     for item in matches_data_input:
                         if item['h_g'] == item['a_g']:
@@ -702,11 +693,11 @@ elif st.session_state.phase == 'swiss':
                                 winner_is_home = hp > ap
                             
                             w_id = item['home_id'] if winner_is_home else item['away_id']
+                            current_round['matches'][item['match_idx']]['winner_id'] = w_id
                             
-                            # --- CORREÇÃO: GRAVAR PLACAR NO HISTÓRICO ---
+                            # SALVA NO HISTORICO
                             current_round['matches'][item['match_idx']]['home_score'] = hg
                             current_round['matches'][item['match_idx']]['away_score'] = ag
-                            current_round['matches'][item['match_idx']]['winner_id'] = w_id
                             
                             update_team_stats(item['home_id'], hg, ag, is_winner=winner_is_home)
                             update_team_stats(item['away_id'], ag, hg, is_winner=not winner_is_home)
