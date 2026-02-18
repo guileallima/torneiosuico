@@ -144,9 +144,9 @@ def generate_export_data():
     return df_rank, df_matches
 
 def render_sidebar_stats():
-    """Função para mostrar o ranking e o histórico na barra lateral"""
+    """Função para mostrar o ranking e o histórico na barra lateral com HTML Compacto"""
     with st.sidebar:
-        # --- TABELA DE CLASSIFICAÇÃO ---
+        # --- TABELA DE CLASSIFICAÇÃO HTML ---
         st.header("📊 Classificação Geral")
         if st.session_state.teams:
             sorted_teams = get_sorted_rankings(st.session_state.teams, for_pairing=False)
@@ -157,52 +157,84 @@ def render_sidebar_stats():
                 if curr.get('bye') and not curr.get('completed'):
                     current_bye_id = curr['bye']['id']
 
-            display_data = []
-            for t in sorted_teams:
-                if t['status'] == 'Classificado':
-                    status_icon = "🟢"
-                elif t['status'] == 'Eliminado':
-                    status_icon = "🔴"
-                else:
-                    status_icon = "⚪"
+            # CSS para a tabela compacta
+            st.markdown("""
+            <style>
+                .compact-table {
+                    width: 100%;
+                    font-size: 12px;
+                    border-collapse: collapse;
+                    margin-bottom: 10px;
+                }
+                .compact-table th, .compact-table td {
+                    padding: 2px 4px;
+                    text-align: center;
+                    border-bottom: 1px solid #444;
+                }
+                .compact-table th {
+                    background-color: #333;
+                    color: white;
+                    font-weight: bold;
+                }
+                .text-left {
+                    text-align: left !important;
+                }
+            </style>
+            """, unsafe_allow_html=True)
 
+            # Cabeçalho da Tabela
+            table_html = """
+            <table class="compact-table">
+                <thead>
+                    <tr>
+                        <th title="Status">St</th>
+                        <th class="text-left">Time</th>
+                        <th>V-D</th>
+                        <th>Bye</th>
+                        <th title="Gols Pró">GP</th>
+                        <th title="Gols Contra">GC</th>
+                        <th title="Saldo de Gols">SG</th>
+                    </tr>
+                </thead>
+                <tbody>
+            """
+
+            for t in sorted_teams:
+                # Ícones
+                if t['status'] == 'Classificado': status_icon = "🟢"
+                elif t['status'] == 'Eliminado': status_icon = "🔴"
+                else: status_icon = "⚪"
+
+                # Nome e Bye Atual
                 name_display = t['name']
                 is_current_bye = (current_bye_id and t['id'] == current_bye_id)
-
                 if is_current_bye:
-                    name_display += " (Folga)"
+                    name_display = f"<b>{t['name']} (F)</b>"
 
-                bye_status_display = 'Sim' if (t['received_bye'] or is_current_bye) else '-'
-                goals_against = t['goals_for'] - t['goal_diff']
+                # Status de Bye
+                bye_disp = 'Sim' if (t['received_bye'] or is_current_bye) else '-'
                 
-                display_data.append({
-                    'St': status_icon,
-                    'Time': name_display,
-                    'V-D': f"{t['wins']}-{t['losses']}",
-                    'Bye': bye_status_display, 
-                    'GP': t['goals_for'],
-                    'GC': goals_against,
-                    'SG': t['goal_diff']
-                })
+                # Cálculos
+                goals_against = t['goals_for'] - t['goal_diff']
+                rec = f"{t['wins']}-{t['losses']}"
+
+                # Linha da Tabela
+                table_html += f"""
+                <tr>
+                    <td>{status_icon}</td>
+                    <td class="text-left">{name_display}</td>
+                    <td>{rec}</td>
+                    <td>{bye_disp}</td>
+                    <td>{t['goals_for']}</td>
+                    <td>{goals_against}</td>
+                    <td>{t['goal_diff']}</td>
+                </tr>
+                """
+
+            table_html += "</tbody></table>"
+            st.markdown(table_html, unsafe_allow_html=True)
             
-            df = pd.DataFrame(display_data)
-            
-            st.dataframe(
-                df, 
-                use_container_width=True, 
-                hide_index=True,
-                column_config={
-                    "St": st.column_config.TextColumn("St", width="min"), 
-                    "Time": st.column_config.TextColumn("Time", width="small"),
-                    "V-D": st.column_config.TextColumn("V-D", width="min"),
-                    "Bye": st.column_config.TextColumn("Bye", width="min"),
-                    "GP": st.column_config.NumberColumn("GP", format="%d", width="min"),
-                    "GC": st.column_config.NumberColumn("GC", format="%d", width="min"),
-                    "SG": st.column_config.NumberColumn("SG", format="%d", width="min"),
-                }
-            )
-            
-            st.caption("GP: Gols Pró | GC: Gols Contra | SG: Saldo")
+            st.caption("GP: Pró | GC: Contra | SG: Saldo | (F): Folga na rodada")
             st.markdown("**Legenda:** 🟢 Classificado | 🔴 Eliminado | ⚪ Ativo")
         
         st.markdown("---")
@@ -276,14 +308,13 @@ def render_sidebar_stats():
 def generate_swiss_round():
     st.session_state.swiss_asking_penalties = False 
     
-    # --- CORREÇÃO ZOMBIE BYE: Filtra apenas quem tem MENOS de 3 derrotas ---
+    # Filtra apenas quem tem MENOS de 3 derrotas
     active_teams = [t for t in st.session_state.teams if t['status'] == 'Ativo' and t['losses'] < 3]
     
     # LÓGICA DE BYE: SORTEIO ENTRE PERDEDORES
     bye_team = None
     
     if len(active_teams) % 2 != 0:
-        # Só considera elegível quem ainda não teve bye E tem menos de 3 derrotas
         eligible_for_bye = [t for t in active_teams if not t['received_bye']]
         candidates = []
         
@@ -343,7 +374,7 @@ def init_playoffs():
     qualified = [t for t in st.session_state.teams if t['status'] == 'Classificado']
     seeds = get_sorted_rankings(qualified, for_pairing=False) 
     
-    # --- CORREÇÃO HARD CAP: Limite máximo de 8 classificados ---
+    # HARD CAP: Limite máximo de 8 classificados
     if len(seeds) > 8:
         st.toast(f"⚠️ Atenção: {len(seeds)} times classificados. Apenas os 8 melhores avançam.")
         seeds = seeds[:8]
