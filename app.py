@@ -17,7 +17,6 @@ if 'playoff_schedule' not in st.session_state:
     st.session_state.playoff_schedule = [] 
 if 'champion' not in st.session_state:
     st.session_state.champion = None
-# Controles de estado para formulários de duas etapas (Pênaltis)
 if 'swiss_asking_penalties' not in st.session_state:
     st.session_state.swiss_asking_penalties = False 
 if 'playoff_asking_penalties' not in st.session_state:
@@ -26,9 +25,6 @@ if 'playoff_asking_penalties' not in st.session_state:
 # --- FUNÇÕES AUXILIARES ---
 
 def get_sorted_rankings(teams, for_pairing=False):
-    """
-    Retorna a lista de times ordenada por mérito.
-    """
     if for_pairing:
         teams = teams.copy()
         random.shuffle(teams)
@@ -42,9 +38,6 @@ def get_sorted_rankings(teams, for_pairing=False):
     ), reverse=True)
 
 def update_team_stats(team_id, goals_scored, goals_conceded, is_winner, is_bye=False):
-    """
-    Atualiza as estatísticas globais do time.
-    """
     found = False
     for team in st.session_state.teams:
         if team['id'] == team_id:
@@ -59,7 +52,6 @@ def update_team_stats(team_id, goals_scored, goals_conceded, is_winner, is_bye=F
             if is_bye:
                 team['received_bye'] = True
             
-            # ATUALIZAÇÃO DE STATUS (Relevante para o Suíço)
             if st.session_state.phase == 'swiss':
                 if team['wins'] >= 3:
                     team['status'] = 'Classificado'
@@ -75,7 +67,6 @@ def convert_df_to_csv(df):
     return df.to_csv(index=False).encode('utf-8')
 
 def generate_export_data():
-    """Gera dataframes para exportação"""
     if st.session_state.teams:
         sorted_teams = get_sorted_rankings(st.session_state.teams, for_pairing=False)
         rank_data = []
@@ -95,7 +86,6 @@ def generate_export_data():
 
     match_history = []
     
-    # Fase Suíça
     for i, r in enumerate(st.session_state.rounds):
         if r.get('completed'): 
             if r['bye']:
@@ -120,7 +110,6 @@ def generate_export_data():
                     'Vencedor': winner_name, 'Notas': ''
                 })
 
-    # Fase Mata-Mata
     for r in st.session_state.playoff_schedule:
         if r['completed']:
             for m in r['matches']:
@@ -144,9 +133,8 @@ def generate_export_data():
     return df_rank, df_matches
 
 def render_sidebar_stats():
-    """Função para mostrar o ranking e o histórico na barra lateral com HTML Compacto"""
+    """Função para mostrar o ranking com HTML corrigido (sem identação)"""
     with st.sidebar:
-        # --- TABELA DE CLASSIFICAÇÃO HTML ---
         st.header("📊 Classificação Geral")
         if st.session_state.teams:
             sorted_teams = get_sorted_rankings(st.session_state.teams, for_pairing=False)
@@ -157,33 +145,36 @@ def render_sidebar_stats():
                 if curr.get('bye') and not curr.get('completed'):
                     current_bye_id = curr['bye']['id']
 
-            # CSS para a tabela compacta
+            # CSS
             st.markdown("""
             <style>
-                .compact-table {
-                    width: 100%;
-                    font-size: 12px;
-                    border-collapse: collapse;
-                    margin-bottom: 10px;
-                }
-                .compact-table th, .compact-table td {
-                    padding: 2px 4px;
-                    text-align: center;
-                    border-bottom: 1px solid #444;
-                }
-                .compact-table th {
-                    background-color: #333;
-                    color: white;
-                    font-weight: bold;
-                }
-                .text-left {
-                    text-align: left !important;
-                }
+                .compact-table { width: 100%; font-size: 12px; border-collapse: collapse; }
+                .compact-table th, .compact-table td { padding: 4px; text-align: center; border-bottom: 1px solid #444; }
+                .compact-table th { background-color: #262730; color: white; }
+                .text-left { text-align: left !important; }
             </style>
             """, unsafe_allow_html=True)
 
-            # Cabeçalho da Tabela
-            table_html = """
+            # Início da Tabela (Sem espaços no início das linhas)
+            html_rows = ""
+            for t in sorted_teams:
+                if t['status'] == 'Classificado': status_icon = "🟢"
+                elif t['status'] == 'Eliminado': status_icon = "🔴"
+                else: status_icon = "⚪"
+
+                name_display = t['name']
+                is_current_bye = (current_bye_id and t['id'] == current_bye_id)
+                if is_current_bye:
+                    name_display = f"<b>{t['name']} (F)</b>"
+
+                bye_disp = 'Sim' if (t['received_bye'] or is_current_bye) else '-'
+                goals_against = t['goals_for'] - t['goal_diff']
+                rec = f"{t['wins']}-{t['losses']}"
+
+                # Constrói a linha sem quebras de linha que gerem identação
+                html_rows += f"<tr><td>{status_icon}</td><td class='text-left'>{name_display}</td><td>{rec}</td><td>{bye_disp}</td><td>{t['goals_for']}</td><td>{goals_against}</td><td>{t['goal_diff']}</td></tr>"
+
+            table_html = f"""
             <table class="compact-table">
                 <thead>
                     <tr>
@@ -197,41 +188,11 @@ def render_sidebar_stats():
                     </tr>
                 </thead>
                 <tbody>
+                    {html_rows}
+                </tbody>
+            </table>
             """
-
-            for t in sorted_teams:
-                # Ícones
-                if t['status'] == 'Classificado': status_icon = "🟢"
-                elif t['status'] == 'Eliminado': status_icon = "🔴"
-                else: status_icon = "⚪"
-
-                # Nome e Bye Atual
-                name_display = t['name']
-                is_current_bye = (current_bye_id and t['id'] == current_bye_id)
-                if is_current_bye:
-                    name_display = f"<b>{t['name']} (F)</b>"
-
-                # Status de Bye
-                bye_disp = 'Sim' if (t['received_bye'] or is_current_bye) else '-'
-                
-                # Cálculos
-                goals_against = t['goals_for'] - t['goal_diff']
-                rec = f"{t['wins']}-{t['losses']}"
-
-                # Linha da Tabela
-                table_html += f"""
-                <tr>
-                    <td>{status_icon}</td>
-                    <td class="text-left">{name_display}</td>
-                    <td>{rec}</td>
-                    <td>{bye_disp}</td>
-                    <td>{t['goals_for']}</td>
-                    <td>{goals_against}</td>
-                    <td>{t['goal_diff']}</td>
-                </tr>
-                """
-
-            table_html += "</tbody></table>"
+            
             st.markdown(table_html, unsafe_allow_html=True)
             
             st.caption("GP: Pró | GC: Contra | SG: Saldo | (F): Folga na rodada")
@@ -308,22 +269,16 @@ def render_sidebar_stats():
 def generate_swiss_round():
     st.session_state.swiss_asking_penalties = False 
     
-    # Filtra apenas quem tem MENOS de 3 derrotas
     active_teams = [t for t in st.session_state.teams if t['status'] == 'Ativo' and t['losses'] < 3]
-    
-    # LÓGICA DE BYE: SORTEIO ENTRE PERDEDORES
     bye_team = None
     
     if len(active_teams) % 2 != 0:
         eligible_for_bye = [t for t in active_teams if not t['received_bye']]
         candidates = []
         
-        # Cenário 1: Primeira Rodada
         if not st.session_state.rounds:
             candidates = eligible_for_bye
-            
         else:
-            # Cenário 2: Filtrar Perdedores da rodada anterior
             last_round = st.session_state.rounds[-1]
             loser_ids = []
             
@@ -374,7 +329,6 @@ def init_playoffs():
     qualified = [t for t in st.session_state.teams if t['status'] == 'Classificado']
     seeds = get_sorted_rankings(qualified, for_pairing=False) 
     
-    # HARD CAP: Limite máximo de 8 classificados
     if len(seeds) > 8:
         st.toast(f"⚠️ Atenção: {len(seeds)} times classificados. Apenas os 8 melhores avançam.")
         seeds = seeds[:8]
@@ -456,7 +410,6 @@ def advance_playoff_round(results, waiting_teams, losers=None):
     next_matches = []
     next_round_name = ""
     
-    # --- LOGICA DE FINALIZAÇÃO ---
     if last_round_name == "Finais":
         champion = None
         vice = None
@@ -487,7 +440,6 @@ def advance_playoff_round(results, waiting_teams, losers=None):
             st.session_state.phase = 'champion'
             return
 
-    # --- DISPUTA DE 3º LUGAR ---
     if last_round_name == "Semifinais" and losers and len(losers) == 2:
         next_round_name = "Finais"
         
@@ -682,8 +634,6 @@ elif st.session_state.phase == 'swiss':
                             winner_is_home = item['h_g'] > item['a_g']
                             w_id = item['home_id'] if winner_is_home else item['away_id']
                             current_round['matches'][item['match_idx']]['winner_id'] = w_id
-                            
-                            # SALVA NO HISTORICO
                             current_round['matches'][item['match_idx']]['home_score'] = item['h_g']
                             current_round['matches'][item['match_idx']]['away_score'] = item['a_g']
                             
@@ -691,7 +641,6 @@ elif st.session_state.phase == 'swiss':
                             update_team_stats(item['away_id'], item['a_g'], item['h_g'], is_winner=not winner_is_home)
                         
                         current_round['completed'] = True
-                        
                         active_count = len([t for t in st.session_state.teams if t['status'] == 'Ativo'])
                         if active_count <= 1:
                             init_playoffs()
@@ -725,8 +674,6 @@ elif st.session_state.phase == 'swiss':
                             
                             w_id = item['home_id'] if winner_is_home else item['away_id']
                             current_round['matches'][item['match_idx']]['winner_id'] = w_id
-                            
-                            # SALVA NO HISTORICO
                             current_round['matches'][item['match_idx']]['home_score'] = hg
                             current_round['matches'][item['match_idx']]['away_score'] = ag
                             
@@ -734,7 +681,6 @@ elif st.session_state.phase == 'swiss':
                             update_team_stats(item['away_id'], ag, hg, is_winner=not winner_is_home)
 
                         current_round['completed'] = True
-                        
                         active_count = len([t for t in st.session_state.teams if t['status'] == 'Ativo'])
                         if active_count <= 1:
                             init_playoffs()
